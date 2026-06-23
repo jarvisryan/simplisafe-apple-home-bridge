@@ -5,8 +5,8 @@ Apple Home. It combines:
 
 - Homebridge and `homebridge-simplisafe3` for the alarm, sensors, locks,
   SimpliCam and Video Doorbell Pro, including UK systems.
-- A small Python helper and `go2rtc` for SimpliSafe Outdoor Cameras that use
-  Amazon Kinesis Video Streams (KVS) over WebRTC.
+- A Python LiveKit bridge and `go2rtc` for current SimpliSafe Outdoor Cameras.
+- A Kinesis path for older cameras that still use AWS Kinesis WebRTC.
 
 > [!WARNING]
 > This project is alpha software. The protocol is undocumented, cloud-dependent
@@ -21,7 +21,8 @@ This project is not affiliated with or endorsed by SimpliSafe or Apple.
 | Device | Apple Home route | Expected support |
 | --- | --- | --- |
 | UK Video Doorbell Pro | Homebridge | Live video, incoming audio, motion and doorbell events |
-| Outdoor Camera | KVS helper + go2rtc | Live H.264 video and incoming audio |
+| Current Outdoor Camera | LiveKit bridge + go2rtc | Experimental live H.264 video and incoming audio |
+| Older Kinesis camera | KVS helper + go2rtc | Experimental live H.264 video and incoming audio |
 | Alarm, entry, motion, smoke, CO, water and freeze sensors | Homebridge | Status, alerts and supported controls |
 | SimpliSafe Smart Lock | Homebridge | Lock state and control |
 | Wireless Indoor Camera | KVS helper + go2rtc | Experimental; hardware testing required |
@@ -34,15 +35,16 @@ life.
 
 ## Requirements
 
-- A Raspberry Pi 4 or newer, an always-on Linux computer, or a compatible NAS.
+- A Raspberry Pi 4 or newer, an always-on Linux computer, a compatible NAS, or
+  an Apple Silicon Mac for testing.
 - Docker Engine with the Compose plugin.
 - A SimpliSafe account with access to the relevant cameras.
 - An iPhone or iPad on the same local network during pairing.
 - An Apple TV or HomePod is recommended for remote Apple Home access.
 
-Linux is the supported host for this alpha. Both containers use host networking
-for HomeKit discovery. Docker Desktop host networking and multicast behaviour
-vary, so macOS and Windows hosts are not yet supported for production use.
+Linux is the recommended always-on host. On macOS, go2rtc must run natively so
+Apple Home can receive its multicast advertisement; the LiveKit decoder remains
+in Docker. Windows is not supported by this alpha.
 
 ## Quick start
 
@@ -81,8 +83,9 @@ vary, so macOS and Windows hosts are not yet supported for production use.
    docker compose run --rm camera-bridge ssah discover
    ```
 
-6. Edit `config/bridge.yaml`. Add only Outdoor Cameras that report KVS/WebRTC
-   support. Use a different eight-digit `homekit_pin` for each installation.
+6. Edit `config/bridge.yaml`. Current cameras normally use
+   `transport: livekit`; older AWS cameras use `transport: kinesis`. Use a
+   different eight-digit `homekit_pin` for each installation.
 
 7. Generate the private go2rtc configuration and start both services:
 
@@ -103,13 +106,15 @@ vary, so macOS and Windows hosts are not yet supported for production use.
    this is expected for an unofficial local bridge.
 
 See [Installation](docs/installation.md) for troubleshooting and update steps.
+Mac users can follow the separate [macOS testing guide](docs/testing-on-macos.md).
 
 ## Security and privacy
 
 - SimpliSafe refresh tokens are stored in a Docker volume, not in the repository
   or Compose environment.
 - Token and PKCE files are written atomically with mode `0600`.
-- The go2rtc web and RTSP interfaces listen only on loopback by default.
+- RTSP listens only on loopback. The go2rtc API also carries HomeKit pairing and
+  must listen on the trusted LAN; never forward port 1984 from the router.
 - Containers use `no-new-privileges`.
 - Logs do not intentionally print tokens, signed Kinesis URLs or ICE credentials.
 - No project-operated cloud service receives account details or video.
@@ -134,10 +139,12 @@ Repository owners should also apply the [recommended GitHub settings](docs/githu
 
 ## Acknowledgements
 
-The Outdoor Camera transport is based on the Kinesis proof of concept from
-`gilliginsisland/simplirtc`, released under The Unlicense. Camera delivery uses
-the MIT-licensed `AlexxIT/go2rtc`. Alarm, sensor and doorbell integration uses
-the MIT-licensed `homebridge-simplisafe3` project. See
+The LiveKit transport incorporates work from the MIT-licensed
+`BookOnTape/simplisafe-livekit-homekit` project. The older camera transport is
+based on the Kinesis proof of concept from `gilliginsisland/simplirtc`, released
+under The Unlicense. Camera delivery uses the MIT-licensed `AlexxIT/go2rtc`.
+Alarm, sensor and doorbell integration uses the MIT-licensed
+`homebridge-simplisafe3` project. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Licence

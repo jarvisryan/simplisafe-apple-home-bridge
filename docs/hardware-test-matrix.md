@@ -5,8 +5,9 @@ region, firmware, host architecture and tester date.
 
 | Device | Region | Feature | Status |
 | --- | --- | --- | --- |
-| Outdoor Camera | UK | Discovery | Awaiting hardware validation |
-| Outdoor Camera | UK | Live video | Awaiting hardware validation |
+| Outdoor Camera | UK | Discovery and HomeKit pairing | Passed on macOS arm64, 2026-06-23 |
+| Outdoor Camera (LiveKit) | UK | Live video | Passed on macOS arm64, 2026-06-23 |
+| Outdoor Camera (Kinesis) | UK | Live video | Passed on macOS arm64, 2026-06-23 |
 | Outdoor Camera | UK | Incoming audio | Awaiting hardware validation |
 | Outdoor Camera | UK | Motion event in Apple Home | Not implemented |
 | Video Doorbell Pro | UK | Homebridge discovery | Upstream-supported; local validation required |
@@ -16,4 +17,3 @@ region, firmware, host architecture and tester date.
 
 Hardware reports must redact account IDs, addresses, serials, tokens, signed
 URLs and ICE credentials before submission.
-

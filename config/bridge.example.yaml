@@ -3,5 +3,5 @@ cameras:
     location_id: "replace-with-location-id"
     camera_id: "replace-with-camera-id"
     homekit_pin: "19550224"
+    transport: livekit
     preload: false
-

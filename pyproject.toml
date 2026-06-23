@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simplisafe-apple-home-bridge"
-version = "0.1.0a1"
+version = "0.1.0a4"
 description = "Unofficial SimpliSafe Outdoor Camera transport for Apple Home"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -37,6 +37,7 @@ dev = [
 
 [project.scripts]
 ssah = "simplisafe_apple_home.cli:main"
+ssah-livekit = "simplisafe_apple_home.livekit_bridge:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

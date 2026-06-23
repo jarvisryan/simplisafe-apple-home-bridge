@@ -41,17 +41,22 @@ cameras:
     location_id: "1234567"
     camera_id: "abcdef0123456789"
     homekit_pin: "48276135"
+    transport: livekit
     preload: false
 ```
 
 Keep `preload: false` for battery-powered Outdoor Cameras. Preloading can improve
 the first-frame delay but may substantially increase power use.
 
+Use `transport: livekit` when the live-view response contains
+`liveKitDetails`. Use `transport: kinesis` only when it contains a signed
+Kinesis endpoint.
+
 After changing the file, regenerate and restart:
 
 ```sh
 docker compose run --rm camera-bridge ssah render
-docker compose restart camera-bridge
+docker compose up -d livekit-bridge camera-bridge
 ```
 
 ## Doorbell Pro and sensors
@@ -97,7 +102,7 @@ contain credentials and HomeKit pairing material.
 
 - Confirm `config/go2rtc.yaml` exists and the camera bridge is running.
 - Confirm the camera ID and location ID were copied exactly.
-- Confirm the camera reports a KVS/WebRTC provider.
+- Confirm `transport` matches the camera's LiveKit or Kinesis response.
 - Check that multicast DNS works between the host and iPhone.
 
 ### Camera says No Response
@@ -105,11 +110,10 @@ contain credentials and HomeKit pairing material.
 - Open the camera once in the official SimpliSafe app to confirm it is online.
 - Wait up to 15 seconds for a sleeping Outdoor Camera to wake.
 - Move the camera closer to its base station or Wi-Fi access point for testing.
-- Check redacted logs with `docker compose logs camera-bridge`.
+- Check redacted logs with `docker compose logs livekit-bridge camera-bridge`.
 
 ### Doorbell tile is missing
 
 - Confirm cameras are enabled in Homebridge SimpliSafe 3.
 - Do not add the Doorbell Pro serial to `excludedDevices`.
 - Restart the Homebridge child bridge after changing plugin settings.
-

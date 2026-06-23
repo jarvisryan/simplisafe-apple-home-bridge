@@ -15,7 +15,7 @@ Apple, AWS, container images or package registries.
 The following must never be committed or posted publicly:
 
 - SimpliSafe OAuth redirects, authorisation codes and refresh/access tokens.
-- Signed Kinesis WebSocket URLs, ICE servers and TURN credentials.
+- Signed Kinesis WebSocket URLs, LiveKit user tokens, ICE servers and TURN credentials.
 - HomeKit pairing databases and Docker volume backups.
 - Unredacted debug logs, account numbers, addresses and camera serials.
 
@@ -24,10 +24,10 @@ local. It is ignored by Git.
 
 ## Network exposure
 
-Host networking is required for reliable HomeKit discovery. The generated
-configuration binds the go2rtc API and RTSP listener to `127.0.0.1`; only its
-HomeKit and WebRTC transport listeners are available on the LAN. Do not publish
-ports 1984, 8554, 8555 or 8581 to the internet.
+The go2rtc API port also carries HomeKit pairing traffic and must be reachable
+from Apple devices on the trusted LAN. RTSP remains bound to loopback. The
+LiveKit bridge ports are published only on host loopback. Do not publish ports
+1984, 8554, 8555, 8581 or 8099-8114 to the internet.
 
 Place the host on a trusted VLAN with outbound HTTPS and local Apple Home access.
 Remote viewing should use an Apple home hub, not router port forwarding.
@@ -39,4 +39,3 @@ Remote viewing should use an Apple home hub, not router port forwarding.
 - Keep repository secret scanning and dependency review enabled.
 - Revoke SimpliSafe sessions and reauthenticate if a token may be exposed.
 - Rotate each custom HomeKit PIN after an unauthorised pairing.
-

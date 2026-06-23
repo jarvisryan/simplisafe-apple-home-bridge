@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -13,8 +13,9 @@ class CameraConfig(BaseModel):
 
     name: str = Field(min_length=1, max_length=64)
     location_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
-    camera_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    camera_id: str = Field(pattern=r"^[A-Fa-f0-9]{32}$")
     homekit_pin: str = Field(default="19550224", pattern=r"^[1-9]\d{7}$")  # noqa: S105
+    transport: Literal["livekit", "kinesis"] = "livekit"
     preload: bool = False
 
     @field_validator("name")

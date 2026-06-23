@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shlex
 import sys
 from pathlib import Path
 
 from .auth import complete_authentication, start_authentication
 from .client import SimpliSafeClient
+from .errors import safe_error_message
 from .go2rtc import live_view_uri, write_go2rtc_config
 from .models import BridgeConfig
 from .storage import PkceStore, TokenStore
@@ -40,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     render = commands.add_parser("render", help="render go2rtc.yaml from bridge.yaml")
     render.add_argument("--config", type=Path, default=Path("/config/bridge.yaml"))
     render.add_argument("--output", type=Path, default=Path("/config/go2rtc.yaml"))
+    render.add_argument(
+        "--native-compose",
+        type=Path,
+        help="embed a host Docker Compose command for native go2rtc",
+    )
     return parser
 
 
@@ -54,7 +61,18 @@ async def run(args: argparse.Namespace) -> int:
         print("Authentication completed. The refresh token is stored in the private data volume.")
         return 0
     if args.command == "render":
-        write_go2rtc_config(BridgeConfig.load(args.config), args.output, args.token)
+        kinesis_command = "ssah"
+        if args.native_compose is not None:
+            compose_file = shlex.quote(str(args.native_compose))
+            kinesis_command = (
+                f"docker compose -f {compose_file} run --rm -T camera-bridge ssah"
+            )
+        write_go2rtc_config(
+            BridgeConfig.load(args.config),
+            args.output,
+            args.token,
+            kinesis_command,
+        )
         print(f"Wrote {args.output}")
         return 0
 
@@ -71,8 +89,8 @@ async def run(args: argparse.Namespace) -> int:
 def main() -> int:
     try:
         return asyncio.run(run(build_parser().parse_args()))
-    except (OSError, RuntimeError, ValueError) as error:
-        print(f"Error: {error}", file=sys.stderr)
+    except Exception as error:  # noqa: BLE001
+        print(f"Error: {safe_error_message(error)}", file=sys.stderr)
         return 1
 
 

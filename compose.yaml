@@ -34,7 +34,28 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  livekit-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.livekit
+    container_name: simplisafe-livekit-bridge
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TZ: "${TZ:-Europe/London}"
+      SSAH_CONFIG: "/config/bridge.yaml"
+      SSAH_TOKEN: "/data/simplisafe-token.json"
+      SSAH_BIND: "0.0.0.0"
+      SSAH_BASE_PORT: "8099"
+      SSAH_WARM_INTERVAL: "0"
+    ports:
+      - "127.0.0.1:8099-8114:8099-8114"
+    volumes:
+      - ./config:/config:ro
+      - camera-secrets:/data
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   homebridge-data:
   camera-secrets:
-
