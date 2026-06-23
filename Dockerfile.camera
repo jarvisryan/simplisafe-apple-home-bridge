@@ -1,0 +1,17 @@
+FROM ghcr.io/alexxit/go2rtc:1.9.14
+
+USER root
+WORKDIR /opt/simplisafe-apple-home
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN python3 -m pip install --no-cache-dir . \
+    && install -d -m 0700 /data \
+    && install -d -m 0755 /config
+
+COPY scripts/camera-entrypoint.sh /usr/local/bin/camera-entrypoint
+RUN chmod 0755 /usr/local/bin/camera-entrypoint
+
+ENTRYPOINT ["/usr/local/bin/camera-entrypoint"]
+CMD ["serve"]
+

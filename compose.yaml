@@ -1,0 +1,40 @@
+name: simplisafe-apple-home
+
+services:
+  homebridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.homebridge
+    container_name: simplisafe-homebridge
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      ENABLE_AVAHI: "1"
+      HOMEBRIDGE_CONFIG_UI: "1"
+      HOMEBRIDGE_CONFIG_UI_PORT: "8581"
+      TZ: "${TZ:-Europe/London}"
+    volumes:
+      - homebridge-data:/homebridge
+    security_opt:
+      - no-new-privileges:true
+
+  camera-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.camera
+    container_name: simplisafe-camera-bridge
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TZ: "${TZ:-Europe/London}"
+    volumes:
+      - ./config:/config
+      - camera-secrets:/data
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  homebridge-data:
+  camera-secrets:
+

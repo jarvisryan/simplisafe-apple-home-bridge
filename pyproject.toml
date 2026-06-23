@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=75,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simplisafe-apple-home-bridge"
+version = "0.1.0a1"
+description = "Unofficial SimpliSafe Outdoor Camera transport for Apple Home"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "SimpliSafe Apple Home Bridge contributors" }]
+keywords = ["apple-home", "homekit", "homebridge", "simplisafe", "camera"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Home Automation",
+]
+dependencies = [
+  "aiohttp>=3.11,<4",
+  "pydantic>=2.10,<3",
+  "PyYAML>=6.0.2,<7",
+  "simplisafe-python>=2024.1.0,<2027",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.15,<2",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+  "ruff>=0.11,<1",
+  "types-PyYAML>=6.0.12,<7",
+]
+
+[project.scripts]
+ssah = "simplisafe_apple_home.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+simplisafe_apple_home = ["py.typed"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "S", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["simplisafe_apple_home"]

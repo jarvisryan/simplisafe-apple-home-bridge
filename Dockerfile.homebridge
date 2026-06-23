@@ -1,0 +1,6 @@
+FROM homebridge/homebridge:2026-04-17
+
+USER root
+RUN npm install --global --omit=dev homebridge-simplisafe3@1.10.16 \
+    && npm cache clean --force
+
