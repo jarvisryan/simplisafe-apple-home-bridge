@@ -16,6 +16,10 @@ from .models import BridgeConfig, CameraConfig
 from .storage import TokenStore
 
 WEBRTC_URL_BASE = "https://app-hub.prd.aser.simplisafe.com/v2"
+# Since 2026-09-10 the app-hub gateway 404s live-view unless the Host header
+# matches the URL; simplipy defaults every request to Host: api.simplisafe.com,
+# so pass the correct host explicitly on every app-hub request.
+APP_HUB_HOST = "app-hub.prd.aser.simplisafe.com"
 
 # Apple Home abandons a camera request after roughly 20 seconds. Wake attempts
 # must stay inside that budget so a sleeping battery camera can still open.
@@ -73,6 +77,7 @@ class LiveViewProvider:
                 "get",
                 f"cameras/{camera.camera_id}/{camera.location_id}/live-view",
                 url_base=WEBRTC_URL_BASE,
+                headers={"Host": APP_HUB_HOST},
             )
         if not isinstance(response, dict):
             raise RuntimeError("SimpliSafe returned an invalid live-view response")
