@@ -64,11 +64,7 @@ class BridgeConfig(BaseModel):
         8099-8114 range and resolving collisions with quadratic probing. The
         result depends only on the set of cameras, never on their order in
         bridge.yaml, so the mapping is stable across config edits and
-        re-renders and each camera keeps its stream and preserved pairing.
-
-        The result is built with model_construct (bypassing re-validation) so
-        the assigned ports survive; mutating self.cameras inside a
-        mode=after validator is silently discarded by pydantic.
+        re-renders: each camera keeps its stream and preserved pairing.
         """
         livekit_cameras = [camera for camera in self.cameras if camera.transport == "livekit"]
         if len(livekit_cameras) > MAX_DECODERS:
@@ -102,8 +98,8 @@ class BridgeConfig(BaseModel):
                         "assign explicit ports in bridge.yaml"
                     )
             updated.append(camera)
-
-        return BridgeConfig.model_construct(cameras=updated)
+        self.cameras = updated
+        return self
 
     @classmethod
     def load(cls, path: Path) -> BridgeConfig:
