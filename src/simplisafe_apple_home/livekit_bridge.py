@@ -7,7 +7,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from aiohttp import ClientSession
 
@@ -22,6 +22,10 @@ WEBRTC_URL_BASE = "https://app-hub.prd.aser.simplisafe.com/v2"
 WAKE_ATTEMPTS = 10
 WAKE_RETRY_SECONDS = 2.0
 VIDEO_TRACK_TIMEOUT_SECONDS = 20.0
+
+# ~100 ms of 16 kHz mono s16le samples; batching cuts thread hops from ~100/s
+# per viewer to ~10/s.
+AUDIO_WRITE_CHUNK_BYTES = 3200
 
 
 def _log(message: str) -> None:
@@ -46,6 +50,8 @@ def livekit_credentials(payload: object) -> tuple[str, str] | None:
 class LiveViewProvider:
     def __init__(self, api: Any) -> None:
         self._api = api
+        # One lock per camera: a slow wake-up on one battery camera must not
+        # delay live-view requests for the others.
         self._request_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     @classmethod
@@ -62,8 +68,6 @@ class LiveViewProvider:
         return cls(api)
 
     async def request(self, camera: CameraConfig) -> dict[str, Any]:
-        # One lock per camera: a slow wake-up on one battery camera must not
-        # delay live-view requests for the others.
         async with self._request_locks[camera.camera_id]:
             response = await self._api.async_request(
                 "get",
@@ -90,9 +94,7 @@ class LiveViewProvider:
                 continue
             credentials = livekit_credentials(response)
             if credentials is not None:
-                _log(
-                    f"{camera.name}: woke after {time.monotonic() - started:.1f}s"
-                )
+                _log(f"{camera.name}: woke after {time.monotonic() - started:.1f}s")
                 return credentials
             status = response.get("cameraStatus", "unknown")
             _log(
@@ -336,8 +338,6 @@ class CameraServer:
                     stop.set()
                     ffmpeg.stdin.close()
 
-            AUDIO_WRITE_CHUNK_BYTES = 3200  # ~100 ms of 16 kHz mono s16le samples
-
             async def feed_audio() -> None:
                 nonlocal audio_stream
                 if audio_write_fd is None:
@@ -425,39 +425,20 @@ async def run() -> None:
     config_path = Path(os.environ.get("SSAH_CONFIG", "/config/bridge.yaml"))
     token_path = Path(os.environ.get("SSAH_TOKEN", "/data/simplisafe-token.json"))
     bind = os.environ.get("SSAH_BIND", "0.0.0.0")  # noqa: S104
-    base_port = int(os.environ.get("SSAH_BASE_PORT", "8099"))
     settings = RuntimeSettings.from_environment()
     config = BridgeConfig.load(config_path)
-    cameras = [
-        camera
-        for camera in config.cameras
-        if camera.transport == "livekit"
-    ]
+    cameras = [camera for camera in config.cameras if camera.transport == "livekit"]
     if not cameras:
         raise RuntimeError("bridge.yaml contains no LiveKit cameras")
 
-    explicit_ports = [camera.port for camera in cameras if camera.port is not None]
-    if len(explicit_ports) != len(set(explicit_ports)):
-        raise RuntimeError("each LiveKit camera needs a distinct stream port")
-
     async with ClientSession() as session:
         provider = await LiveViewProvider.create(token_path, session)
-        camera_servers = []
-        for camera in cameras:
-            if camera.port is not None:
-                port = camera.port
-            else:
-                port = next(
-                    candidate
-                    for candidate in range(base_port, base_port + MAX_LIVEKIT_CAMERAS)
-                    if candidate not in assigned_ports
-                )
-                assigned_ports.add(port)
-                _log(
-                    f"{camera.name}: no stream port configured, "
-                    f"allocating {port} from config order"
-                )
-            camera_servers.append(CameraServer(camera, port, provider, settings))
+        # BridgeConfig.resolve_decoder_ports guarantees a unique, identity-keyed
+        # decoder port for every livekit camera.
+        camera_servers = [
+            CameraServer(camera, cast(int, camera.port), provider, settings)
+            for camera in cameras
+        ]
         servers = [
             await asyncio.start_server(server.handle, bind, server.port)
             for server in camera_servers
