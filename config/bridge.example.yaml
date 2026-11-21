@@ -2,6 +2,10 @@ cameras:
   - name: Back Garden
     location_id: "replace-with-location-id"
     camera_id: "replace-with-camera-id"
-    homekit_pin: "19550224"
+    # Required: a unique, non-trivial eight-digit PIN per installation.
+    homekit_pin: "replace-with-8-digit-pin"
     transport: livekit
     preload: false
+    # Optional: pin the decoder port (8099-8114). Leave unset to let the
+    # bridge allocate a stable port automatically.
+    # port: 8099
