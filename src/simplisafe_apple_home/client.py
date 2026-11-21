@@ -10,6 +10,9 @@ from .models import DiscoveredCamera, LiveView
 from .storage import TokenStore
 
 WEBRTC_URL_BASE = "https://app-hub.prd.aser.simplisafe.com/v2"
+# Since 2026-09-10 the app-hub gateway 404s live-view unless the Host header
+# matches the URL; simplipy defaults every request to Host: api.simplisafe.com.
+APP_HUB_HOST = "app-hub.prd.aser.simplisafe.com"
 
 
 class SimpliSafeClient:
@@ -77,6 +80,7 @@ class SimpliSafeClient:
             "get",
             f"cameras/{camera_id}/{location_id}/live-view",
             url_base=WEBRTC_URL_BASE,
+            headers={"Host": APP_HUB_HOST},
         )
         payload = cast(dict[str, Any], response)
         endpoint = payload.get("signedChannelEndpoint")
