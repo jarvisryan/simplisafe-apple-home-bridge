@@ -1,7 +1,6 @@
 import asyncio
+import time
 from typing import Any
-
-import pytest
 
 from simplisafe_apple_home.livekit_bridge import (
     LiveViewProvider,
@@ -47,11 +46,14 @@ def test_runtime_settings_disable_audio(monkeypatch: Any) -> None:
 
 async def test_live_view_requests_run_concurrently_across_cameras() -> None:
     """A slow request for one camera must not delay the others."""
+    started: dict[str, float] = {}
 
     class SlowApi:
-        async def async_request(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
-            await asyncio.sleep(0.05)
-            return {}
+        async def async_request(self, _method: str, path: str, **_kwargs: object) -> dict[str, Any]:
+            camera_id = path.split("/")[1]
+            started[camera_id] = time.monotonic()
+            await asyncio.sleep(0.2)
+            return {"cameraStatus": "offline"}
 
     provider = LiveViewProvider(SlowApi())
     garden = make_camera()
@@ -62,37 +64,34 @@ async def test_live_view_requests_run_concurrently_across_cameras() -> None:
         homekit_pin="13572468",
     )
 
-    async def request(camera: CameraConfig) -> None:
-        with pytest.raises(RuntimeError, match="invalid live-view"):
-            await provider.request(camera)
+    begin = time.monotonic()
+    await asyncio.gather(provider.request(garden), provider.request(drive))
+    total = time.monotonic() - begin
 
-    await asyncio.gather(request(garden), request(drive))
+    # With a single shared lock, the two 200 ms requests would serialise to
+    # roughly 400 ms; per-camera locks should finish near 200 ms.
+    assert total < 0.35, f"requests appear serialised across cameras: {total:.2f}s"
+    assert set(started) == {garden.camera_id, drive.camera_id}
 
 
-async def test_request_lock_is_per_camera(monkeypatch: Any) -> None:
-    seen: list[str] = []
+async def test_repeat_requests_for_one_camera_are_serialised() -> None:
+    """Concurrent requests for the SAME camera take turns, not overlap."""
+    active = 0
+    max_active = 0
 
-    class RecordingApi:
+    class CountingApi:
         async def async_request(self, _method: str, path: str, **_kwargs: object) -> dict[str, Any]:
-            camera_id = path.split("/")[0]
-            seen.append(camera_id)
-            # Interleave: yield control so the other camera's request starts.
-            await asyncio.sleep(0)
-            return {}
+            nonlocal active, max_active
+            camera_id = path.split("/")[1]
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.05)
+            active -= 1
+            return {"cameraStatus": "offline", "cameraId": camera_id}
 
-    provider = LiveViewProvider(RecordingApi())
-
-    async def request(camera: CameraConfig) -> None:
-        with pytest.raises(RuntimeError, match="invalid live-view"):
-            await provider.request(camera)
-
+    provider = LiveViewProvider(CountingApi())
     garden = make_camera()
-    drive = CameraConfig(
-        name="Drive",
-        location_id="location-1",
-        camera_id="b" * 32,
-        homekit_pin="13572468",
-    )
-    await asyncio.gather(request(garden), request(drive))
 
-    assert seen == [garden.camera_id, drive.camera_id]
+    await asyncio.gather(*[provider.request(garden) for _ in range(3)])
+
+    assert max_active == 1, f"per-camera lock did not serialise: {max_active} overlapping"
