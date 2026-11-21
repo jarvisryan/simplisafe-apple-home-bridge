@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,12 @@ from .models import BridgeConfig, CameraConfig
 from .storage import TokenStore
 
 WEBRTC_URL_BASE = "https://app-hub.prd.aser.simplisafe.com/v2"
+
+# Apple Home abandons a camera request after roughly 20 seconds. Wake attempts
+# must stay inside that budget so a sleeping battery camera can still open.
+WAKE_ATTEMPTS = 10
+WAKE_RETRY_SECONDS = 2.0
+VIDEO_TRACK_TIMEOUT_SECONDS = 20.0
 
 
 def _log(message: str) -> None:
@@ -39,7 +46,7 @@ def livekit_credentials(payload: object) -> tuple[str, str] | None:
 class LiveViewProvider:
     def __init__(self, api: Any) -> None:
         self._api = api
-        self._request_lock = asyncio.Lock()
+        self._request_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     @classmethod
     async def create(cls, token_path: Path, session: ClientSession) -> LiveViewProvider:
@@ -55,7 +62,9 @@ class LiveViewProvider:
         return cls(api)
 
     async def request(self, camera: CameraConfig) -> dict[str, Any]:
-        async with self._request_lock:
+        # One lock per camera: a slow wake-up on one battery camera must not
+        # delay live-view requests for the others.
+        async with self._request_locks[camera.camera_id]:
             response = await self._api.async_request(
                 "get",
                 f"cameras/{camera.camera_id}/{camera.location_id}/live-view",
@@ -66,25 +75,35 @@ class LiveViewProvider:
         return response
 
     async def credentials(self, camera: CameraConfig) -> tuple[str, str]:
-        for attempt in range(30):
+        started = time.monotonic()
+        for attempt in range(WAKE_ATTEMPTS):
             try:
                 response = await self.request(camera)
             except Exception as error:  # noqa: BLE001
                 if http_status(error) not in {400, 409}:
                     raise
                 _log(
-                    f"{camera.name}: wake attempt {attempt + 1}, "
+                    f"{camera.name}: wake attempt {attempt + 1}/{WAKE_ATTEMPTS}, "
                     f"HTTP {http_status(error)}"
                 )
-                await asyncio.sleep(2)
+                await asyncio.sleep(WAKE_RETRY_SECONDS)
                 continue
             credentials = livekit_credentials(response)
             if credentials is not None:
+                _log(
+                    f"{camera.name}: woke after {time.monotonic() - started:.1f}s"
+                )
                 return credentials
             status = response.get("cameraStatus", "unknown")
-            _log(f"{camera.name}: wake attempt {attempt + 1}, status={status}")
-            await asyncio.sleep(2)
-        raise RuntimeError(f"{camera.name}: camera did not provide LiveKit credentials")
+            _log(
+                f"{camera.name}: wake attempt {attempt + 1}/{WAKE_ATTEMPTS}, "
+                f"status={status}"
+            )
+            await asyncio.sleep(WAKE_RETRY_SECONDS)
+        raise RuntimeError(
+            f"{camera.name}: camera did not provide LiveKit credentials "
+            f"within {WAKE_ATTEMPTS * WAKE_RETRY_SECONDS:.0f}s"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,14 +143,16 @@ class CameraServer:
         self.provider = provider
         self.settings = settings
         self._active: asyncio.Task[None] | None = None
+        self._session_lock = asyncio.Lock()
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        if self._active is not None and not self._active.done():
-            self._active.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._active
-        task = asyncio.create_task(self._run_session(reader, writer))
-        self._active = task
+        async with self._session_lock:
+            if self._active is not None and not self._active.done():
+                self._active.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await self._active
+            task = asyncio.create_task(self._run_session(reader, writer))
+            self._active = task
         try:
             await task
         except asyncio.CancelledError:
@@ -158,6 +179,7 @@ class CameraServer:
     ) -> None:
         from livekit import rtc  # type: ignore[import-not-found]
 
+        session_started = time.monotonic()
         _log(f"{self.camera.name}: viewer connected")
         room: Any = None
         video_stream: Any = None
@@ -184,16 +206,21 @@ class CameraServer:
                 video_ready.set()
 
             await room.connect(url, token)
-            await asyncio.wait_for(video_ready.wait(), timeout=60)
+            await asyncio.wait_for(
+                video_ready.wait(), timeout=VIDEO_TRACK_TIMEOUT_SECONDS
+            )
             if "video" not in tracks:
                 raise RuntimeError("LiveKit room disconnected before sending video")
-            await asyncio.sleep(0.5)
 
             video_stream = rtc.VideoStream(tracks["video"])
             first_event = await video_stream.__anext__()
             first_frame = first_event.frame.convert(rtc.VideoBufferType.I420)
             width, height = first_frame.width, first_frame.height
             have_audio = self.settings.enable_audio and "audio" in tracks
+            _log(
+                f"{self.camera.name}: first frame after "
+                f"{time.monotonic() - session_started:.1f}s"
+            )
 
             command = [
                 "ffmpeg",
@@ -309,11 +336,14 @@ class CameraServer:
                     stop.set()
                     ffmpeg.stdin.close()
 
+            AUDIO_WRITE_CHUNK_BYTES = 3200  # ~100 ms of 16 kHz mono s16le samples
+
             async def feed_audio() -> None:
                 nonlocal audio_stream
                 if audio_write_fd is None:
                     raise RuntimeError("FFmpeg audio input is unavailable")
                 write_fd = audio_write_fd
+                buffer = bytearray()
                 try:
                     audio_stream = rtc.AudioStream(
                         tracks["audio"],
@@ -323,12 +353,16 @@ class CameraServer:
                     async for event in audio_stream:
                         if stop.is_set():
                             break
-                        await asyncio.to_thread(
-                            os.write, write_fd, bytes(event.frame.data)
-                        )
+                        buffer.extend(bytes(event.frame.data))
+                        if len(buffer) < AUDIO_WRITE_CHUNK_BYTES:
+                            continue
+                        await asyncio.to_thread(os.write, write_fd, bytes(buffer))
+                        buffer.clear()
                 except (BrokenPipeError, OSError):
                     pass
                 finally:
+                    with contextlib.suppress(OSError):
+                        os.write(write_fd, bytes(buffer))
                     with contextlib.suppress(OSError):
                         os.close(write_fd)
 
@@ -360,7 +394,10 @@ class CameraServer:
                 tasks.append(asyncio.create_task(feed_audio()))
             await stop.wait()
         finally:
-            _log(f"{self.camera.name}: viewer disconnected")
+            _log(
+                f"{self.camera.name}: viewer disconnected after "
+                f"{time.monotonic() - session_started:.1f}s"
+            )
             for task in tasks:
                 task.cancel()
             if tasks:
@@ -392,21 +429,35 @@ async def run() -> None:
     settings = RuntimeSettings.from_environment()
     config = BridgeConfig.load(config_path)
     cameras = [
-        (index, camera)
-        for index, camera in enumerate(config.cameras)
+        camera
+        for camera in config.cameras
         if camera.transport == "livekit"
     ]
     if not cameras:
         raise RuntimeError("bridge.yaml contains no LiveKit cameras")
-    if len(config.cameras) > 16:
-        raise RuntimeError("at most 16 configured cameras are supported")
+
+    explicit_ports = [camera.port for camera in cameras if camera.port is not None]
+    if len(explicit_ports) != len(set(explicit_ports)):
+        raise RuntimeError("each LiveKit camera needs a distinct stream port")
 
     async with ClientSession() as session:
         provider = await LiveViewProvider.create(token_path, session)
-        camera_servers = [
-            CameraServer(camera, base_port + index, provider, settings)
-            for index, camera in cameras
-        ]
+        camera_servers = []
+        for camera in cameras:
+            if camera.port is not None:
+                port = camera.port
+            else:
+                port = next(
+                    candidate
+                    for candidate in range(base_port, base_port + MAX_LIVEKIT_CAMERAS)
+                    if candidate not in assigned_ports
+                )
+                assigned_ports.add(port)
+                _log(
+                    f"{camera.name}: no stream port configured, "
+                    f"allocating {port} from config order"
+                )
+            camera_servers.append(CameraServer(camera, port, provider, settings))
         servers = [
             await asyncio.start_server(server.handle, bind, server.port)
             for server in camera_servers
