@@ -105,3 +105,22 @@ def write_go2rtc_config(
         encoding="utf-8",
     )
     return api_password
+
+
+def _preserve_pairings(output: Path, rendered: dict[str, object]) -> None:
+    if not output.exists():
+        return
+    existing = yaml.safe_load(output.read_text(encoding="utf-8"))
+    if not isinstance(existing, dict):
+        return
+    old_homekit = existing.get("homekit")
+    new_homekit = rendered.get("homekit")
+    if not isinstance(old_homekit, dict) or not isinstance(new_homekit, dict):
+        return
+    for slug, settings in new_homekit.items():
+        old_settings = old_homekit.get(slug)
+        if not isinstance(settings, dict) or not isinstance(old_settings, dict):
+            continue
+        for key in PAIRING_KEYS:
+            if key in old_settings:
+                settings[key] = old_settings[key]
