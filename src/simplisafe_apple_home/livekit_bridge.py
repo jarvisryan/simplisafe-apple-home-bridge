@@ -7,7 +7,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from aiohttp import ClientSession
 
@@ -431,20 +431,12 @@ async def run() -> None:
     if not cameras:
         raise RuntimeError("bridge.yaml contains no LiveKit cameras")
 
-    # BridgeConfig.resolve_decoder_ports guarantees a unique port per livekit
-    # camera, keyed to the camera rather than its position in the file.
-    camera_servers = []
-    for camera in cameras:
-        if camera.port is None:
-            raise RuntimeError(
-                f"{camera.name}: no decoder port assigned; bridge.yaml failed validation"
-            )
-        camera_servers.append(CameraServer(camera, camera.port, provider_placeholder, settings))
-
     async with ClientSession() as session:
         provider = await LiveViewProvider.create(token_path, session)
+        # BridgeConfig.resolve_decoder_ports guarantees a unique, identity-keyed
+        # decoder port for every livekit camera.
         camera_servers = [
-            CameraServer(camera, camera.port, provider, settings)  # type: ignore[arg-type]
+            CameraServer(camera, cast(int, camera.port), provider, settings)
             for camera in cameras
         ]
         servers = [
