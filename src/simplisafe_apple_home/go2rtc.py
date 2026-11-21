@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shlex
@@ -9,14 +8,17 @@ from urllib.parse import quote
 
 import yaml
 
-from .models import BridgeConfig, LiveView
+from .errors import safe_error_message
+from .models import BridgeConfig, CameraConfig, LiveView
 
 LIVEKIT_BASE_PORT = 8099
 PAIRING_KEYS = ("device_id", "device_private", "pairings")
 
 
 def live_view_uri(live_view: LiveView) -> str:
-    ice_servers = json.dumps(live_view.ice_servers, separators=(",", ":"))
+    ice_servers = quote(
+        json.dumps(live_view.ice_servers, separators=(",", ":")), safe=""
+    )
     return (
         f"webrtc:{live_view.signed_channel_endpoint}"
         f"#format=kinesis#client_id={quote(live_view.client_id, safe='')}"
@@ -42,7 +44,8 @@ def render_go2rtc_config(
     for index, camera in enumerate(config.cameras):
         slug = stream_slug(camera.name, camera.camera_id)
         if camera.transport == "livekit":
-            streams[slug] = [f"tcp://127.0.0.1:{LIVEKIT_BASE_PORT + index}"]
+            port = camera.port if camera.port is not None else LIVEKIT_BASE_PORT + index
+            streams[slug] = [f"tcp://127.0.0.1:{port}"]
         else:
             command = (
                 f"echo:{kinesis_command} --token {shlex.quote(str(token_path))} stream"
