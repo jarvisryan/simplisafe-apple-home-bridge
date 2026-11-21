@@ -14,9 +14,12 @@ class CameraConfig(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     location_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     camera_id: str = Field(pattern=r"^[A-Fa-f0-9]{32}$")
-    homekit_pin: str = Field(default="19550224", pattern=r"^[1-9]\d{7}$")  # noqa: S105
+    homekit_pin: str = Field(pattern=r"^[1-9]\d{7}$")  # noqa: S105
     transport: Literal["livekit", "kinesis"] = "livekit"
     preload: bool = False
+    # Optional explicit decoder port for livekit cameras. Unset ports are
+    # allocated automatically; see BridgeConfig.resolve_decoder_ports.
+    port: int | None = Field(default=None, ge=8099, le=8114)
 
     @field_validator("name")
     @classmethod
@@ -43,6 +46,36 @@ class BridgeConfig(BaseModel):
         identifiers = [(camera.location_id, camera.camera_id) for camera in self.cameras]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("each camera can appear only once")
+        return self
+
+    @model_validator(mode="after")
+    def resolve_decoder_ports(self) -> BridgeConfig:
+        """Assign a unique decoder port (8099-8114) to every livekit camera.
+
+        Explicit ``port`` values are honoured; cameras without one take the
+        lowest free port. Because the render step then keys the go2rtc TCP
+        source off ``camera.port``, ports no longer depend on the position of
+        a camera in bridge.yaml - reordering entries or inserting a new camera
+        cannot silently repoint an existing go2rtc stream while its preserved
+        HomeKit pairing still points at the old port.
+        """
+        livekit_cameras = [camera for camera in self.cameras if camera.transport == "livekit"]
+        if len(livekit_cameras) > 16:
+            raise ValueError("at most 16 livekit cameras are supported")
+
+        explicit = [camera.port for camera in livekit_cameras if camera.port is not None]
+        if len(explicit) != len(set(explicit)):
+            raise ValueError("each livekit camera needs a unique port")
+
+        taken = set(explicit)
+        updated: list[CameraConfig] = []
+        for camera in self.cameras:
+            if camera.transport == "livekit" and camera.port is None:
+                port = next(p for p in range(8099, 8115) if p not in taken)
+                taken.add(port)
+                camera = camera.model_copy(update={"port": port})
+            updated.append(camera)
+        self.cameras = updated
         return self
 
     @classmethod
