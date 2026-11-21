@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import secrets
 import shlex
 from pathlib import Path
 from urllib.parse import quote
 
 import yaml
 
-from .errors import safe_error_message
-from .models import BridgeConfig, CameraConfig, LiveView
+from .models import BridgeConfig, LiveView, assign_livekit_ports
 
 LIVEKIT_BASE_PORT = 8099
 PAIRING_KEYS = ("device_id", "device_private", "pairings")
@@ -36,15 +37,17 @@ def render_go2rtc_config(
     config: BridgeConfig,
     token_path: Path,
     kinesis_command: str = "ssah",
+    api_password: str | None = None,
 ) -> dict[str, object]:
     streams: dict[str, list[str]] = {}
     homekit: dict[str, dict[str, object]] = {}
     preload: dict[str, None] = {}
+    ports = assign_livekit_ports(config)
 
-    for index, camera in enumerate(config.cameras):
+    for camera in config.cameras:
         slug = stream_slug(camera.name, camera.camera_id)
         if camera.transport == "livekit":
-            port = camera.port if camera.port is not None else LIVEKIT_BASE_PORT + index
+            port = ports[(camera.location_id, camera.camera_id)]
             streams[slug] = [f"tcp://127.0.0.1:{port}"]
         else:
             command = (
@@ -59,8 +62,12 @@ def render_go2rtc_config(
         if camera.preload:
             preload[slug] = None
 
+    api: dict[str, object] = {"listen": ":1984"}
+    if api_password:
+        api["password"] = api_password
+
     rendered: dict[str, object] = {
-        "api": {"listen": ":1984"},
+        "api": api,
         "rtsp": {"listen": "127.0.0.1:8554"},
         "webrtc": {"listen": ":8555"},
         "streams": streams,
@@ -77,15 +84,37 @@ def write_go2rtc_config(
     output: Path,
     token_path: Path,
     kinesis_command: str = "ssah",
-) -> None:
+) -> str | None:
+    """Render go2rtc.yaml, preserving HomeKit pairings and the API password.
+
+    Returns the API password in force after the write: an existing one kept
+    verbatim, or a freshly generated one on first render.
+    """
     output.parent.mkdir(parents=True, exist_ok=True)
-    rendered = render_go2rtc_config(config, token_path, kinesis_command)
+    api_password = _existing_api_password(output) or secrets.token_urlsafe(12)
+    rendered = render_go2rtc_config(config, token_path, kinesis_command, api_password)
     _preserve_pairings(output, rendered)
     # go2rtc's YAML reader does not fold wrapped command scalars reliably.
     output.write_text(
         yaml.safe_dump(rendered, sort_keys=False, width=4096),
         encoding="utf-8",
     )
+    return api_password
+
+
+def _existing_api_password(output: Path) -> str | None:
+    if not output.exists():
+        return None
+    existing = yaml.safe_load(output.read_text(encoding="utf-8"))
+    if not isinstance(existing, dict):
+        return None
+    api = existing.get("api")
+    if not isinstance(api, dict):
+        return None
+    password = api.get("password")
+    if not isinstance(password, str) or not password:
+        return None
+    return password
 
 
 def _preserve_pairings(output: Path, rendered: dict[str, object]) -> None:
