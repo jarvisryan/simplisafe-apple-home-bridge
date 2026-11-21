@@ -43,6 +43,15 @@ class CameraConfig(BaseModel):
             raise ValueError("choose a non-trivial HomeKit PIN")
         return value
 
+    @field_validator("port")
+    @classmethod
+    def port_is_sentinel_or_in_range(cls, value: int) -> int:
+        if value != 0 and not DECODER_PORT_MIN <= value <= DECODER_PORT_MAX:
+            raise ValueError(
+                f"port must be between {DECODER_PORT_MIN} and {DECODER_PORT_MAX}, or 0 for auto"
+            )
+        return value
+
 
 class BridgeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -61,10 +70,12 @@ class BridgeConfig(BaseModel):
         """Give every livekit camera a unique decoder port.
 
         Ports marked 0 are derived by hashing the camera's identity into the
-        8099-8114 range and resolving collisions with quadratic probing. The
-        result depends only on the set of cameras, never on their order in
-        bridge.yaml, so the mapping is stable across config edits and
-        re-renders: each camera keeps its stream and preserved pairing.
+        8099-8114 range and resolving collisions with quadratic probing. Auto
+        cameras are processed in sorted identity order, so even a hash
+        collision resolves identically regardless of the order cameras appear
+        in bridge.yaml: the mapping is a pure function of the camera set and
+        survives config edits and re-renders without repointing existing
+        go2rtc streams under their preserved HomeKit pairings.
         """
         livekit_cameras = [camera for camera in self.cameras if camera.transport == "livekit"]
         if len(livekit_cameras) > MAX_DECODERS:
@@ -75,28 +86,37 @@ class BridgeConfig(BaseModel):
             raise ValueError("each livekit camera needs a unique port")
 
         taken = set(explicit)
+        span = DECODER_PORT_MAX - DECODER_PORT_MIN + 1
+        derived: dict[tuple[str, str], int] = {}
+        for camera in sorted(
+            (camera for camera in livekit_cameras if camera.port == 0),
+            key=lambda camera: (camera.location_id, camera.camera_id),
+        ):
+            digest = int.from_bytes(
+                hashlib.blake2b(
+                    f"{camera.location_id}|{camera.camera_id}".encode("utf-8"),
+                    digest_size=4,
+                ).digest(),
+                "big",
+            )
+            for probe in range(span):
+                port = DECODER_PORT_MIN + (digest + probe * probe) % span
+                if port not in taken:
+                    taken.add(port)
+                    derived[(camera.location_id, camera.camera_id)] = port
+                    break
+            else:
+                raise ValueError(
+                    f"no free decoder port for camera {camera.name}; "
+                    "assign explicit ports in bridge.yaml"
+                )
+
         updated: list[CameraConfig] = []
         for camera in self.cameras:
             if camera.transport == "livekit" and camera.port == 0:
-                digest = int.from_bytes(
-                    hashlib.blake2b(
-                        f"{camera.location_id}|{camera.camera_id}".encode("utf-8"),
-                        digest_size=4,
-                    ).digest(),
-                    "big",
+                camera = camera.model_copy(
+                    update={"port": derived[(camera.location_id, camera.camera_id)]}
                 )
-                span = DECODER_PORT_MAX - DECODER_PORT_MIN + 1
-                for probe in range(span):
-                    port = DECODER_PORT_MIN + (digest + probe * probe) % span
-                    if port not in taken:
-                        taken.add(port)
-                        camera = camera.model_copy(update={"port": port})
-                        break
-                else:
-                    raise ValueError(
-                        f"no free decoder port for camera {camera.name}; "
-                        "assign explicit ports in bridge.yaml"
-                    )
             updated.append(camera)
         self.cameras = updated
         return self
