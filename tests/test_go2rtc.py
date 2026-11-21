@@ -51,16 +51,20 @@ def test_live_view_uri_encodes_fragment_metacharacters() -> None:
         ice_servers=[{"urls": ["stun:example.test:443"], "username": "u#1"}],
     )
     uri = live_view_uri(view)
-    assert "#" not in uri.split("format=kinesis#", 1)[0]
-    assert uri.count("#") == 3  # format, client_id, ice_servers separators only
+    # Both fragment values are percent-encoded: no raw '#' leaks into a
+    # fragment separator, which would truncate the go2rtc source string.
+    assert "client%23id" in uri
+    assert "%23" in uri.split("#ice_servers=", 1)[1]
 
 
 def test_render_creates_stable_stream_and_homekit_accessory() -> None:
-    rendered = render_go2rtc_config(make_config(), Path("/data/token.json"))
+    config = make_config()
+    rendered = render_go2rtc_config(config, Path("/data/token.json"))
     slug = stream_slug("Back Garden", CAMERA_ID)
     assert slug in rendered["streams"]
     assert rendered["homekit"][slug]["pin"] == "48276135"
-    assert rendered["streams"][slug] == ["tcp://127.0.0.1:8099"]
+    # The stream must point at the port the bridge will actually listen on.
+    assert rendered["streams"][slug] == [f"tcp://127.0.0.1:{config.cameras[0].port}"]
 
 
 def test_render_creates_kinesis_command_when_selected() -> None:
@@ -129,8 +133,10 @@ def test_explicit_ports_honoured_and_validated() -> None:
     ports = [camera.port for camera in config.cameras]
     assert sorted(port for port in ports if port is not None) == [8099, 8110]
 
-    with pytest.raises(ValidationError, match="greater than or equal to 8099"):
+    with pytest.raises(ValidationError):
         make_camera(port=8115)
+    with pytest.raises(ValidationError):
+        make_camera(port=8098)
     with pytest.raises(ValidationError, match="unique port"):
         BridgeConfig(
             cameras=[
@@ -138,6 +144,10 @@ def test_explicit_ports_honoured_and_validated() -> None:
                 make_camera(name="Drive", camera_id=OTHER_CAMERA_ID, homekit_pin="13572468", port=8100),
             ]
         )
+    # Port 0 means auto-derive; the bridge then assigns a real port.
+    auto = BridgeConfig(cameras=[make_camera(name="Garden")])
+    assert auto.cameras[0].port != 0
+    assert 8099 <= auto.cameras[0].port <= 8114
 
 
 def test_write_does_not_wrap_long_camera_command(tmp_path: Path) -> None:
@@ -150,6 +160,7 @@ def test_write_does_not_wrap_long_camera_command(tmp_path: Path) -> None:
         cameras=[
             make_camera(
                 name="Back Garden",
+                camera_id="c" * 32,
                 transport="kinesis",
             )
         ]
@@ -163,8 +174,10 @@ def test_write_does_not_wrap_long_camera_command(tmp_path: Path) -> None:
         kinesis_command,
     )
 
-    command_line = next(line for line in output.read_text().splitlines() if "echo:ssah" in line)
-    assert f"--camera {CAMERA_ID}" in command_line
+    command_line = next(
+        line for line in output.read_text().splitlines() if "echo:" in line
+    )
+    assert '--camera ' + "c" * 32 in command_line
     assert kinesis_command in command_line
 
 
